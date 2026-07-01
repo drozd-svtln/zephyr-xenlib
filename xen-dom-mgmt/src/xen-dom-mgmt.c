@@ -1025,7 +1025,7 @@ static int dom0less_get_next_domain(uint32_t domid_start, struct xen_domctl_getd
 static int dom0less_init_domain(uint32_t domid, struct xen_domctl_getdomaininfo *infos)
 {
 	struct xen_domain *domain;
-	xen_pfn_t magic_base_pfn;
+	xen_pfn_t xenstore_pfn;
 	uint64_t value;
 	int rc;
 
@@ -1044,13 +1044,6 @@ static int dom0less_init_domain(uint32_t domid, struct xen_domctl_getdomaininfo 
 
 	snprintf(domain->name, CONTAINER_NAME_SIZE, "Dom0less-%u", domid);
 
-	/*
-	 * Xenstore initialization.
-	 * In dom0less boot case the Xenstore event is already allocated and also allocated
-	 * XEN_MAGIC pages, so Dom0 here should get them and use to init Xenstore.
-	 * At the end Dom0 should set HVM_PARAM_STORE_PFN
-	 * to notify guest domain that Xenstore is ready.
-	 */
 	rc = hvm_get_parameter(HVM_PARAM_STORE_EVTCHN, domain->domid, &value);
 	if (rc) {
 		LOG_ERR("dom0less:domid:%u Get HVM_PARAM_STORE_EVTCHN err (%d)", domid, rc);
@@ -1061,26 +1054,26 @@ static int dom0less_init_domain(uint32_t domid, struct xen_domctl_getdomaininfo 
 	LOG_DBG("dom0less: remote_domid=%d, xenstore.remote_evtchn = %d", domain->domid,
 		domain->xenstore.remote_evtchn);
 
-	rc = hvm_get_parameter(HVM_PARAM_MAGIC_BASE_PFN, domid, &magic_base_pfn);
+	rc = hvm_get_parameter(HVM_PARAM_STORE_PFN, domid, &xenstore_pfn);
 	if (rc < 0) {
-		LOG_ERR("dom0less:domid:%u Get HVM_PARAM_MAGIC_BASE_PFN err (%d)", domid, rc);
+		LOG_ERR("dom0less:domid:%u Get HVM_PARAM_STORE_PFN err (%d)", domid, rc);
 		goto err_free;
 	}
 
-	LOG_DBG("dom0less:domid:%u MAGIC_BASE_PFN %llx", domid, magic_base_pfn);
-	magic_base_pfn = magic_base_pfn + XENSTORE_PFN_OFFSET;
+	LOG_DBG("dom0less:domid:%u STORE_PFN %llx", domid, xenstore_pfn);
 
-	/* init Xenstore */
-	rc = start_domain_stored(domain, magic_base_pfn);
+	/* Domain lacks 'xen,enhanced' or is a legacy guest requiring external allocation */
+	if (xenstore_pfn == ~0ULL) {
+		LOG_ERR("dom0less:domid:%u Invalid STORE_PFN", domid);
+		rc = -ENODEV;
+		goto err_free;
+	}
+
+	/* Init Xenstore */
+	rc = start_domain_stored(domain, xenstore_pfn);
 	if (rc) {
 		LOG_ERR("dom0less:domid:%u start Xenstore err (%d)", domid, rc);
 		goto err_free;
-	}
-
-	rc = hvm_set_parameter(HVM_PARAM_STORE_PFN, domid, magic_base_pfn);
-	if (rc) {
-		LOG_ERR("dom0less:domid:%u set HVM_PARAM_STORE_PFN err (%d)", domid, rc);
-		goto err_free_stored;
 	}
 
 	rc = xs_initialize_xenstore(domid, domain);
