@@ -30,7 +30,7 @@
 #include <xstat.h>
 #endif
 
-LOG_MODULE_REGISTER(xen_dom_mgmt);
+LOG_MODULE_REGISTER(xen_dom_mgmt, 4);
 
 struct modules_address {
   uint64_t ventry;
