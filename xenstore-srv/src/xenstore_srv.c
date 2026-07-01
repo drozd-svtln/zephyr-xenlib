@@ -1879,9 +1879,8 @@ int start_domain_stored(struct xen_domain *domain, xen_pfn_t store_pfn)
 	}
 
 	xenstore->domint->server_features = XENSTORE_SERVER_FEATURE_RECONNECTION;
-	if (domain->f_dom0less) {
-		xenstore->domint->connection = XENSTORE_RECONNECT;
-	} else {
+
+	if (!domain->f_dom0less) {
 		xenstore->domint->connection = XENSTORE_CONNECTED;
 	}
 
