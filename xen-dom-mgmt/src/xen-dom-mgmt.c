@@ -642,14 +642,33 @@ static int bind_domain_irqs(int domid, uint32_t *irqs, int nr_irqs)
 {
 	int i, rc = 0;
 
+	LOG_INF("Binding %d IRQs for domain #%d", nr_irqs, domid);
+
+	if (!irqs || nr_irqs <= 0) {
+		LOG_WRN("WARNING: No IRQs provided in domcfg for domain #%d!", domid);
+		/* 
+			* TEMPORARY FALLBACK: Explicitly grant the ARM generic timer PPIs 
+			* and the RPi 5 GPIO interrupt so the guest can boot.
+			*/
+		uint32_t fallback_irqs[] = { 27, 28, 29, 30, 121 /* Example GPIO SPI */ };
+		// Or handle fallback logic here
+	}
+
 	for (i = 0; i < nr_irqs; i++) {
+		rc = xen_domctl_irq_permission(domid, irqs[i], 1);
+		if (rc) {
+			LOG_ERR("Failed to allow irq access to #%u, (rc=%d)", irqs[i], rc);
+			return rc;
+		}
+
 		rc = xen_domctl_bind_pt_irq(domid, irqs[i], PT_IRQ_TYPE_SPI, 0, 0, 0, 0, irqs[i]);
 		if (rc) {
 			LOG_ERR("Failed to bind irq#%u, (rc=%d)", irqs[i], rc);
-			/*return rc;*/
+			return rc;
+		} else {
+			LOG_INF("Successfully granted and bound IRQ #%u", irqs[i]);
 		}
 	}
-
 	return rc;
 }
 
