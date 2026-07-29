@@ -393,11 +393,6 @@ static int probe_zimage(int domid, uint64_t base_addr,
 		return rc;
 	}
 
-	nr_pages = DIV_ROUND_UP(domain_size, XEN_PAGE_SIZE);
-	LOG_DBG("zImage header info: text_offset = %llx, base_addr = %llx, pages = %llu size = %llu",
-		zhdr.text_offset, base_addr, nr_pages,
-		nr_pages * XEN_PAGE_SIZE);
-
 	rc = gen_domain_fdt(domcfg, (void **)&fdt, &fdt_size,
 			   XEN_VERSION_MAJOR, XEN_VERSION_MINOR,
 			   (void *)domcfg->dtb_start,
@@ -421,50 +416,108 @@ static int probe_zimage(int domid, uint64_t base_addr,
 		goto out_dtb;
 	}
 
-	rc = xenmem_map_region(domid, nr_pages, load_gfn, &mapped_image);
-	if (rc) {
-		LOG_ERR("Failed to map GFN to Dom0 (rc=%d)", rc);
-		goto out_dtb;
+#define MAP_CHUNK_SIZE (256 * XEN_PAGE_SIZE) /* 2 page chunks */
+#define MAP_CHUNK_PAGES (MAP_CHUNK_SIZE / XEN_PAGE_SIZE)
+
+	size_t bytes_remaining = domain_size;
+	xen_pfn_t current_gfn = load_gfn;
+	off_t current_image_offset = image_read_offset;
+
+	while (bytes_remaining > 0) {
+		size_t chunk_bytes = MIN(bytes_remaining, MAP_CHUNK_SIZE);
+		uint32_t chunk_pages = DIV_ROUND_UP(chunk_bytes, XEN_PAGE_SIZE);
+		void *mapped_chunk = NULL;
+
+		/* 1. Map only a small chunk (max 512 pages / 2MB) */
+		rc = xenmem_map_region(domid, chunk_pages, current_gfn, &mapped_chunk);
+		if (rc) {
+			LOG_ERR("Failed to map chunk at GFN 0x%llx (rc=%d)", (uint64_t)current_gfn, rc);
+			goto out_dtb;
+		}
+
+		/* 2. Load bytes directly into mapped chunk slice */
+		rc = domcfg->load_image_bytes(mapped_chunk, chunk_bytes,
+						current_image_offset, domcfg->image_info);
+		if (rc < 0) {
+			LOG_ERR("Error calling load_image_bytes rc: %d", rc);
+			xenmem_unmap_region(chunk_pages, mapped_chunk);
+			goto out_dtb;
+		}
+
+		// /* 3. Flush cache for this chunk while mapped_chunk/current_gfn is valid */
+		// rc = xenmem_cacheflush_mapped_pfns(chunk_pages, current_gfn);
+		// if (rc) {
+		// 	LOG_ERR("Failed to flush memory chunk at GFN 0x%llx (rc=%d)", 
+		// 		(uint64_t)current_gfn, rc);
+		// 	xenmem_unmap_region(chunk_pages, mapped_chunk);
+		// 	goto out_dtb;
+		// }
+
+		rc = arch_dcache_flush_and_invd_range(mapped_chunk, chunk_pages);
+		if (rc) {
+			LOG_ERR("Failed to flush memory for domid#%d (rc=%d)",
+				domid, rc);
+			err_cache_flush = rc;
+		}
+
+		/* 3. Unmap chunk before processing the next one */
+		xenmem_unmap_region(chunk_pages, mapped_chunk);
+
+		bytes_remaining -= chunk_bytes;
+		current_image_offset += chunk_bytes;
+		current_gfn += chunk_pages;
 	}
 
-	LOG_DBG("Zephyr Domain start addr = %p, binary size = 0x%llx",
-		mapped_image, domain_size);
+	nr_pages = DIV_ROUND_UP(domain_size, XEN_PAGE_SIZE);
+	// LOG_DBG("zImage header info: text_offset = %llx, base_addr = %llx, pages = %llu size = %llu",
+	// 	zhdr.text_offset, base_addr, nr_pages,
+	// 	nr_pages * XEN_PAGE_SIZE);
 
-	/* Copy binary to domain pages and clear cache */
-	rc = domcfg->load_image_bytes(mapped_image, domain_size,
-				      image_read_offset, domcfg->image_info);
-	if (rc < 0) {
-		LOG_ERR("Error calling load_image_bytes rc: %d", rc);
-		goto out_dtb;
-	}
+	// rc = xenmem_map_region(domid, nr_pages, load_gfn, &mapped_image);
+	// if (rc) {
+	// 	LOG_ERR("Failed to map GFN to Dom0 (rc=%d)", rc);
+	// 	goto out_dtb;
+	// }
+
+	// LOG_DBG("Zephyr Domain start addr = %p, binary size = 0x%llx",
+	// 	mapped_image, domain_size);
+
+	// /* Copy binary to domain pages and clear cache */
+	// rc = domcfg->load_image_bytes(mapped_image, domain_size,
+	// 			      image_read_offset, domcfg->image_info);
+	// if (rc < 0) {
+	// 	LOG_ERR("Error calling load_image_bytes rc: %d", rc);
+	// 	goto out_dtb;
+	// }
 
 	LOG_DBG("Kernel image is copied");
 	/*
 	 * This is not critical, so try to restore memory to dom0
 	 * and then return error code.
 	 */
-	rc = arch_dcache_flush_and_invd_range(mapped_image, nr_pages);
-	if (rc) {
-		LOG_ERR("Failed to flush memory for domid#%d (rc=%d)",
-			domid, rc);
-		err_cache_flush = rc;
-	}
+	// rc = xenmem_cacheflush_mapped_pfns(nr_pages,
+	// 				   xen_virt_to_gfn(mapped_image));
+	// if (rc) {
+	// 	LOG_ERR("Failed to flush memory for domid#%d (rc=%d)",
+	// 		domid, rc);
+	// 	err_cache_flush = rc;
+	// }
 
-	rc = xenmem_unmap_region(nr_pages, mapped_image);
-	if (rc) {
-		LOG_ERR("Failed to unmap memory for domid#%d (rc=%d)",
-			domid, rc);
-		goto out_dtb;
-	}
+	// rc = xenmem_unmap_region(nr_pages, mapped_image);
+	// if (rc) {
+	// 	LOG_ERR("Failed to unmap memory for domid#%d (rc=%d)",
+	// 		domid, rc);
+	// 	goto out_dtb;
+	// }
 	/*
 	 * We postponed this to unmap DomU memory region as we failed to flush
 	 * cache for domain pages. We need to return error code to prevent
 	 * DomU from using dirty pages.
 	 */
-	if (err_cache_flush) {
-		rc = err_cache_flush;
-		goto out_dtb;
-	}
+	// if (err_cache_flush) {
+	// 	rc = err_cache_flush;
+	// 	goto out_dtb;
+	// }
 
 	/* .text start address in domU memory */
 	modules->ventry = load_addr;
