@@ -54,6 +54,24 @@ static sys_dlist_t domain_list = SYS_DLIST_STATIC_INIT(&domain_list);
 K_MUTEX_DEFINE(dl_mutex);
 K_MUTEX_DEFINE(create_mutex);
 
+static void check_vcpu_online_state(uint32_t domid)
+{
+    struct vcpu_guest_context vcpu_ctx;
+    int rc;
+
+    memset(&vcpu_ctx, 0, sizeof(vcpu_ctx));
+
+    /* xen_domctl_getvcpucontext queries arch_get_info_guest */
+    rc = xen_domctl_getvcpucontext(domid, 0, &vcpu_ctx);
+    if (rc == 0) {
+        bool is_online = !!(vcpu_ctx.flags & VGCF_online);
+        LOG_ERR("MY_DEBUG: Dom#%u VCPU0 VGCF_online=%d (_VPF_down=%d)",
+                domid, is_online, !is_online);
+    } else {
+        LOG_ERR("MY_DEBUG: getvcpucontext failed rc=%d", rc);
+    }
+}
+
 static void arch_prepare_domain_cfg(struct xen_domain_cfg *dom_cfg,
 				    struct xen_arch_domainconfig *arch_cfg)
 {
@@ -830,11 +848,15 @@ int domain_create(struct xen_domain_cfg *domcfg, uint32_t domid)
 		goto domain_free;
 	}
 
+	check_vcpu_online_state(domid);
+
 	rc = start_domain_stored(domain, XEN_PHYS_PFN(GUEST_MAGIC_BASE) + XENSTORE_PFN_OFFSET);
 	if (rc) {
 		LOG_ERR("Failed to start domain#%u stored (rc=%d)", domid, rc);
 		goto domain_free;
 	}
+
+	// check_vcpu_online_state(domid);
 
 #ifdef CONFIG_XEN_CONSOLE_SRV
 	rc = xen_start_domain_console(domain);
@@ -844,6 +866,8 @@ int domain_create(struct xen_domain_cfg *domcfg, uint32_t domid)
 	}
 #endif
 
+	// check_vcpu_online_state(domid);
+
 	k_mutex_lock(&create_mutex, K_FOREVER);
 	if (find_domain_by_name(name) != 0) {
 		rc = -EEXIST;
@@ -852,12 +876,17 @@ int domain_create(struct xen_domain_cfg *domcfg, uint32_t domid)
 		goto stop_domain_console;
 	}
 
+	// check_vcpu_online_state(domid);
+
 	rc = xs_initialize_xenstore(domid, domain);
 	k_mutex_unlock(&create_mutex);
 
 	if (rc) {
 		goto stop_domain_console;
 	}
+
+	LOG_ERR("MY_DEBUG: domcfg->f_paused %d", domcfg->f_paused);
+	// check_vcpu_online_state(domid);
 
 	if (!domcfg->f_paused) {
 		rc = xen_domctl_unpausedomain(domid);
@@ -866,6 +895,7 @@ int domain_create(struct xen_domain_cfg *domcfg, uint32_t domid)
 			goto stop_domain_console;
 		}
 	}
+	check_vcpu_online_state(domid);
 
 	k_mutex_lock(&dl_mutex, K_FOREVER);
 	domain->refcount = 1;
@@ -891,6 +921,7 @@ domain_free:
 destroy_domain:
 	xen_domctl_destroydomain(domid);
 
+	LOG_ERR("MY_DEBUG: domain_create failed with rc %d", rc);
 	return rc;
 }
 
