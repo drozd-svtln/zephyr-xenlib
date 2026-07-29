@@ -586,6 +586,7 @@ static int load_modules(int domid, struct xen_domain_cfg *domcfg,
 
 	rc = probe_uimage(domid, domcfg, modules);
 	if (rc) {
+		LOG_INF("MY_DEBUG");
 		rc = probe_zimage(domid, base_addr, 0, domcfg, modules);
 		if (rc) {
 			LOG_ERR("Error loading image, unsupported format");
