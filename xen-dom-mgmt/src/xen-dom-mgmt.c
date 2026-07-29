@@ -593,6 +593,19 @@ static int load_modules(int domid, struct xen_domain_cfg *domcfg,
 		}
 	}
 
+	/* Clean & invalidate guest RAM from CPU data cache */
+	struct xen_domctl_cacheflush cacheflush = {
+		.start_pfn = base_pfn,
+		.nr_pfns = (domcfg->mem_kb * 1024) / XEN_PAGE_SIZE,
+	};
+	
+	rc = xen_domctl_cacheflush(domid, &cacheflush);
+	if (rc) {
+		LOG_WRN("Failed to flush domain#%d memory cache (rc=%d)", domid, rc);
+	} else {
+		LOG_INF("Domain#%d memory cache flushed successfully", domid);
+	}
+
 	return 0;
 }
 
