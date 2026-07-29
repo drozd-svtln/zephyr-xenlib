@@ -622,6 +622,8 @@ static int share_domain_iomems(int domid, struct xen_domain_iomem *iomems,
 			       iomems[i].first_mfn, rc);
 		}
 
+		uint64_t gfn = iomems[i].first_gfn ? iomems[i].first_gfn : iomems[i].first_mfn;
+
 		if (!iomems[i].first_gfn) {
 			/* Map to same location as machine frame number */
 			rc = xen_domctl_memory_mapping(domid, iomems[i].first_mfn,
@@ -634,6 +636,9 @@ static int share_domain_iomems(int domid, struct xen_domain_iomem *iomems,
 		if (rc) {
 			LOG_ERR("Failed to map mfn 0x%llx (rc=%d)", iomems[i].first_mfn, rc);
 		}
+
+		LOG_INF("Successfully mapped MFN 0x%llx to Gfn 0x%llx", 
+                    iomems[i].first_mfn, gfn);
 	}
 
 	return rc;
