@@ -136,7 +136,8 @@ static int allocate_domain_evtchns(struct xen_domain *domain)
 	return 0;
 }
 
-static int allocate_magic_pages(int domid)
+static int allocate_magic_pages(int domid, struct xen_domain_cfg *cfg,
+				uint32_t xenstore_evtchn, uint32_t console_evtchn_dev)
 {
 	int rc = -ENOMEM, err_cache_flush = 0;
 	void *mapped_magic;
@@ -165,7 +166,7 @@ static int allocate_magic_pages(int domid)
 	 * This is not critical, so try to restore memory to dom0
 	 * and then return error code.
 	 */
-	rc = arch_dcache_flush_and_invd_range(mapped_magic, NR_MAGIC_PAGES);
+	rc = arch_dcache_flush_and_invd_range(mapped_magic, XEN_PAGE_SIZE * NR_MAGIC_PAGES);
 	if (rc) {
 		LOG_ERR("Failed to flush memory for domid#%d (rc=%d)",
 			domid, rc);
@@ -201,18 +202,31 @@ static int allocate_magic_pages(int domid)
 			domid, rc);
 	}
 
+	rc = hvm_set_parameter(HVM_PARAM_CONSOLE_EVTCHN, domid, console_evtchn_dev);
+	if (rc) {
+		LOG_ERR("Failed to set HVM_PARAM_CONSOLE_EVTCHN for domid#%d (rc=%d)", domid, rc);
+		return rc;
+	}
+
+	rc = hvm_set_parameter(HVM_PARAM_STORE_EVTCHN, domid, xenstore_evtchn);
+	if (rc) {
+		LOG_ERR("Failed to set HVM_PARAM_STORE_EVTCHN for domid#%d (rc=%d)", domid, rc);
+		return rc;
+	}
+
 	return rc;
 }
 
 /* We need to populate magic pages and memory map here */
-static int prepare_domain_physmap(int domid, uint64_t base_pfn, struct xen_domain_cfg *cfg)
+static int prepare_domain_physmap(int domid, uint64_t base_pfn, struct xen_domain_cfg *cfg,
+				  uint32_t xenstore_evtchn, uint32_t console_evtchn_dev)
 {
 	int rc;
 	uint64_t populated_gfn;
 	uint64_t nr_mem_exts =
 		DIV_ROUND_UP(cfg->mem_kb * 1024, PFN_2M_SIZE);
 
-	rc = allocate_magic_pages(domid);
+	rc = allocate_magic_pages(domid, cfg, xenstore_evtchn, console_evtchn_dev);
 	if (rc) {
 		LOG_ERR("Failed to allocate magic pages for domid#%d (rc=%d)",
 			domid, rc);
@@ -572,13 +586,14 @@ static int probe_uimage(int domid, struct xen_domain_cfg *domcfg,
 }
 
 static int load_modules(int domid, struct xen_domain_cfg *domcfg,
-			 struct modules_address *modules)
+			 struct modules_address *modules,
+			 uint32_t xenstore_evtchn, uint32_t console_evtchn_dev)
 {
 	int rc;
 	uint64_t base_addr = GUEST_RAM0_BASE;
 	uint64_t base_pfn = XEN_PHYS_PFN(base_addr);
 
-	rc = prepare_domain_physmap(domid, base_pfn, domcfg);
+	rc = prepare_domain_physmap(domid, base_pfn, domcfg, xenstore_evtchn, console_evtchn_dev);
 	if (rc) {
 		LOG_ERR("Error preparing physmap (rc=%d)", rc);
 		return rc;
@@ -903,7 +918,7 @@ int domain_create(struct xen_domain_cfg *domcfg, uint32_t domid)
 		goto domain_free;
 	}
 
-	rc = load_modules(domid, domcfg, &modules);
+	rc = load_modules(domid, domcfg, &modules, domain->xenstore.remote_evtchn, domain->console.evtchn);
 	if (rc) {
 		LOG_ERR("Unable to load image for domain#%u, insufficient memory (rc=%d)", domid, rc);
 		goto domain_free;
