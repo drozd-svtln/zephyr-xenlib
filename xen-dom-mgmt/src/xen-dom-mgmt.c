@@ -806,11 +806,6 @@ int domain_create(struct xen_domain_cfg *domcfg, uint32_t domid)
 	memset(&config, 0, sizeof(config));
 	prepare_domain_cfg(domcfg, &config);
 	config.grant_opts = XEN_DOMCTL_GRANT_version(1);
-/* Set resource and grant table limits required by Xen 4.21 */
-        config.max_grant_frames = 32;     /* Allow up to 32 grant frames for console/xenstore */
-        config.max_maptrack_frames = -1;  /* Use system default maptrack frames */
-        config.max_evtchn_port = -1;      /* Use default maximum event channel ports */
-
 
 	LOG_HEXDUMP_INF(&config, sizeof(config), "domctl.u.createdomain config Dump:");
 
