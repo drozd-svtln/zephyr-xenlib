@@ -202,13 +202,15 @@ static int allocate_magic_pages(int domid, struct xen_domain_cfg *cfg,
 			domid, rc);
 	}
 
-	rc = hvm_set_parameter(HVM_PARAM_CONSOLE_EVTCHN, domid, console_evtchn_dev);
+	LOG_INF("MY_DEBUG: console %d, xenstore %d", console_evtchn_dev, xenstore_evtchn);
+
+	rc = hvm_set_parameter(HVM_PARAM_CONSOLE_EVTCHN, domid, 2);
 	if (rc) {
 		LOG_ERR("Failed to set HVM_PARAM_CONSOLE_EVTCHN for domid#%d (rc=%d)", domid, rc);
 		return rc;
 	}
 
-	rc = hvm_set_parameter(HVM_PARAM_STORE_EVTCHN, domid, xenstore_evtchn);
+	rc = hvm_set_parameter(HVM_PARAM_STORE_EVTCHN, domid, 1);
 	if (rc) {
 		LOG_ERR("Failed to set HVM_PARAM_STORE_EVTCHN for domid#%d (rc=%d)", domid, rc);
 		return rc;
@@ -245,78 +247,25 @@ static int prepare_domain_physmap(int domid, uint64_t base_pfn, struct xen_domai
 }
 
 static uint64_t get_dtb_addr(uint64_t rambase, uint64_t ramsize,
-							 uint64_t kernbase, uint64_t kernsize,
-							 uint64_t dtbsize)
+                             uint64_t kernbase, uint64_t kernsize,
+                             uint64_t dtbsize)
 {
-	const uint64_t dtb_len = ROUND_UP(dtbsize, MB(2));
-	const uint64_t ramend = rambase + ramsize;
-	const uint64_t ram128mb = rambase + MB(128);
-	const uint64_t kernsize_aligned = ROUND_UP(kernsize, MB(2));
-	const uint64_t kernend = kernbase + kernsize;
-	const uint64_t modsize = dtb_len;
-	uint64_t modbase;
+        const uint64_t dtb_len = ROUND_UP(dtbsize, KB(4)); /* 4KB page align, not 2MB */
+        const uint64_t kernsize_aligned = ROUND_UP(kernsize, MB(2));
+        uint64_t modbase = kernbase + kernsize_aligned;    /* Place right after kernel */
 
-	LOG_INF("rambase = %llx, ramsize = %llu", rambase, ramsize);
-	LOG_INF("kernbase = %llx kernsize = %llu, dtbsize = %llu",
-		   kernbase, kernsize, dtbsize);
-	LOG_INF("kernsize_aligned = %lld", kernsize_aligned);
+        LOG_INF("rambase = %llx, ramsize = %llu", rambase, ramsize);
+        LOG_INF("kernbase = %llx kernsize = %llu, dtbsize = %llu",
+                kernbase, kernsize, dtbsize);
 
-	if (modsize + kernsize_aligned > ramsize) {
-		LOG_ERR("Not enough memory in the first bank for the kernel+dtb+initrd");
-		return 0;
-	}
+        if (modbase + dtb_len > rambase + ramsize) {
+                LOG_ERR("Not enough memory in RAM bank for kernel + DTB");
+                return 0;
+        }
 
-	/*
-	 * Comment was taken from XEN source code from function
-	 * place_modules (xen/arch/arm/kernel.c) and added here for the
-	 * better understanding why this algorithm was used.
-	 * DTB must be loaded such that it does not conflict with the
-	 * kernel decompressor. For 32-bit Linux Documentation/arm/Booting
-	 * recommends just after the 128MB boundary while for 64-bit Linux
-	 * the recommendation in Documentation/arm64/booting.txt is below
-	 * 512MB.
-	 *
-	 * If the bootloader provides an initrd, it will be loaded just
-	 * after the DTB.
-	 *
-	 * We try to place dtb+initrd at 128MB or if we have less RAM
-	 * as high as possible. If there is no space then fallback to
-	 * just before the kernel.
-	 *
-	 * If changing this then consider
-	 * tools/libxc/xc_dom_arm.c:arch_setup_meminit as well.
-	 */
-
-	/*
-	 * According to the Linux Documentation/arm64/booting.rst Header notes:
-	 * Decompressed kernel image has Bit 3 in kernel flags:
-	 * Bit 3		Kernel physical placement
-	 *
-	 *  0
-	 *     2MB aligned base should be as close as possible
-	 *     to the base of DRAM, since memory below it is not
-	 *     accessible via the linear mapping
-	 *  1
-	 *     2MB aligned base may be anywhere in physical
-	 *     memory
-	 * When Bit 3 was set to 0 - then the memory below kernel base address
-	 * is not accessible by the kernel. That's why dtb should be placed
-	 * somewhere after kernel base address.
-	 */
-
-	if (ramend >= ram128mb + modsize && kernend < ram128mb)
-		modbase = ram128mb;
-	else if (ramend - modsize > kernsize_aligned)
-		modbase = ramend - modsize;
-	else if (kernbase - rambase > modsize)
-		modbase = kernbase - modsize;
-	else {
-		LOG_ERR("Unable to find suitable location for dtb+initrd");
-		return 0;
-	}
-
-	return modbase;
-};
+        LOG_INF("DTB placed directly after kernel at 0x%llx", modbase);
+        return modbase;
+}
 
 static int load_dtb(int domid, uint64_t dtb_addr, const char *dtb_start,
 		    const char *dtb_end)
@@ -863,6 +812,8 @@ int domain_create(struct xen_domain_cfg *domcfg, uint32_t domid)
         config.max_evtchn_port = 1024;      /* Use default maximum event channel ports */
 
 
+	LOG_HEXDUMP_INF(&config, sizeof(config), "domctl.u.createdomain config Dump:");
+
 	rc = xen_domctl_createdomain(&domid, &config);
 	if (rc) {
 		LOG_ERR("Failed to create domain#%u (rc=%d)", domid, rc);
@@ -953,6 +904,10 @@ int domain_create(struct xen_domain_cfg *domcfg, uint32_t domid)
 	vcpu_ctx.user_regs.cpsr = PSR_GUEST64_INIT;
 	vcpu_ctx.sctlr = SCTLR_GUEST_INIT;
 	vcpu_ctx.flags = VGCF_online;
+
+	LOG_INF("Setting modules dtb addr to 0x%llx", modules.dtb_addr);
+	LOG_INF("Setting VCPU PC entry point to 0x%llx", modules.ventry);
+
 
 	rc = xen_domctl_setvcpucontext(domid, 0, &vcpu_ctx);
 	if (rc) {
