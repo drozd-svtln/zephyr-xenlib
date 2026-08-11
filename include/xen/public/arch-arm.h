@@ -184,7 +184,7 @@
 #define uint64_aligned_t uint64_t __attribute__((__aligned__(8)))
 #endif
 
-#ifndef __ASSEMBLY__
+#ifndef __ASSEMBLER__
 #define ___DEFINE_XEN_GUEST_HANDLE(name, type)                  \
     typedef union { type *p; unsigned long q; }                 \
         __guest_handle_ ## name;                                \
@@ -329,7 +329,10 @@ DEFINE_XEN_GUEST_HANDLE(vcpu_guest_context_t);
 
 #define XEN_DOMCTL_CONFIG_ARM_SCI_NONE      0
 #define XEN_DOMCTL_CONFIG_ARM_SCI_SCMI_SMC  1
-#define XEN_DOMCTL_CONFIG_ARM_SCI_SCMI_SMC_MA  2
+
+#define XEN_DOMCTL_CONFIG_ARM_V8R_EL1_MSA_NONE    0
+#define XEN_DOMCTL_CONFIG_ARM_V8R_EL1_MSA_PMSA    1
+#define XEN_DOMCTL_CONFIG_ARM_V8R_EL1_MSA_VMSA    2
 
 struct xen_arch_domainconfig {
     /* IN/OUT */
@@ -340,11 +343,6 @@ struct xen_arch_domainconfig {
     uint16_t tee_type;
     /* IN */
     uint32_t nr_spis;
-    /*
-     * IN
-     * OSID used by virtual GSX device.
-     */
-    uint8_t vgsx_osid;
     /*
      * OUT
      * Based on the property clock-frequency in the DT timer node.
@@ -362,7 +360,8 @@ struct xen_arch_domainconfig {
     /* IN */
     uint8_t arm_sci_type;
     /* IN */
-    uint8_t arm_sci_agent_id;
+    uint8_t v8r_el1_msa;
+    uint16_t pad;
 };
 #endif /* __XEN__ || __XEN_TOOLS__ */
 
@@ -421,7 +420,7 @@ typedef uint64_t xen_callback_t;
  * zImage kernels on aarch32.
  */
 #define PSR_GUEST32_INIT (PSR_Z|PSR_ABT_MASK|PSR_FIQ_MASK|PSR_IRQ_MASK|PSR_MODE_SVC)
-#define PSR_GUEST64_INIT (PSR_ABT_MASK|PSR_FIQ_MASK|PSR_IRQ_MASK|PSR_MODE_EL1h|PSR_DBG_MASK)
+#define PSR_GUEST64_INIT (PSR_ABT_MASK|PSR_FIQ_MASK|PSR_IRQ_MASK|PSR_MODE_EL1h)
 
 #define SCTLR_GUEST_INIT    xen_mk_ullong(0x00c50078)
 
@@ -480,23 +479,6 @@ typedef uint64_t xen_callback_t;
 #define GUEST_VPCI_MEM_SIZE                 xen_mk_ullong(0x10000000)
 
 /*
- * 16 MB is reserved for virtio-pci configuration space based on calculation
- * 8 bridges * 2 buses x 32 devices x 8 functions x 4 KB = 16 MB
- */
-#define GUEST_VIRTIO_PCI_ECAM_BASE          xen_mk_ullong(0x33000000)
-#define GUEST_VIRTIO_PCI_TOTAL_ECAM_SIZE    xen_mk_ullong(0x01000000)
-#define GUEST_VIRTIO_PCI_HOST_ECAM_SIZE     xen_mk_ullong(0x00200000)
-
-/* 64 MB is reserved for virtio-pci memory */
-#define GUEST_VIRTIO_PCI_ADDR_TYPE_MEM    xen_mk_ullong(0x02000000)
-#define GUEST_VIRTIO_PCI_MEM_ADDR         xen_mk_ullong(0x34000000)
-#define GUEST_VIRTIO_PCI_MEM_SIZE         xen_mk_ullong(0x04000000)
-
-/* Guest TPM device */
-#define GUEST_TPM_BASE    xen_mk_ullong(0x0c000000)
-#define GUEST_TPM_SIZE    xen_mk_ullong(0x00005000)
-
-/*
  * 16MB == 4096 pages reserved for guest to use as a region to map its
  * grant table in.
  */
@@ -506,11 +488,6 @@ typedef uint64_t xen_callback_t;
 #define GUEST_MAGIC_BASE  xen_mk_ullong(0x39000000)
 #define GUEST_MAGIC_SIZE  xen_mk_ullong(0x01000000)
 
-/* 64 MB is reserved for virtio-pci Prefetch memory */
-#define GUEST_VIRTIO_PCI_ADDR_TYPE_PREFETCH_MEM    xen_mk_ullong(0x42000000)
-#define GUEST_VIRTIO_PCI_PREFETCH_MEM_ADDR         xen_mk_ullong(0x3a000000)
-#define GUEST_VIRTIO_PCI_PREFETCH_MEM_SIZE         xen_mk_ullong(0x04000000)
-
 #define GUEST_RAM_BANKS   2
 
 /*
@@ -518,8 +495,8 @@ typedef uint64_t xen_callback_t;
  * address space) relies on the fact that the regions reserved for the RAM
  * below are big enough to also accommodate such regions.
  */
-#define GUEST_RAM0_BASE   xen_mk_ullong(0x40000000) /* 2GB of low RAM @ 1GB */
-#define GUEST_RAM0_SIZE   xen_mk_ullong(0x80000000)
+#define GUEST_RAM0_BASE   xen_mk_ullong(0x40000000) /* 3GB of low RAM @ 1GB */
+#define GUEST_RAM0_SIZE   xen_mk_ullong(0xc0000000)
 
 /* 4GB @ 4GB Prefetch Memory for VPCI */
 #define GUEST_VPCI_ADDR_TYPE_PREFETCH_MEM   xen_mk_ullong(0x43000000)
@@ -551,9 +528,6 @@ typedef uint64_t xen_callback_t;
 #define GUEST_VIRTIO_MMIO_SPI_FIRST   33
 #define GUEST_VIRTIO_MMIO_SPI_LAST    43
 
-#define GUEST_VIRTIO_PCI_SPI_FIRST   44
-#define GUEST_VIRTIO_PCI_SPI_LAST    76
-
 /*
  * SGI is the preferred delivery mechanism of FF-A pending notifications or
  * schedule recveive interrupt. SGIs 8-15 are normally not used by a guest
@@ -575,7 +549,7 @@ typedef uint64_t xen_callback_t;
 
 #endif
 
-#ifndef __ASSEMBLY__
+#ifndef __ASSEMBLER__
 /* Stub definition of PMU structure */
 typedef struct xen_pmu_arch { uint8_t dummy; } xen_pmu_arch_t;
 #endif
