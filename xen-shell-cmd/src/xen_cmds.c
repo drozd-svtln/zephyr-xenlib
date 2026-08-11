@@ -85,8 +85,7 @@ uint32_t parse_domid(size_t argc, char **argv)
 		}
 	}
 
-	/* Use zero as invalid value */
-	return 0;
+	return DOMID_ANY;
 }
 
 void parse_and_fill_flags(size_t argc, char **argv, struct xen_domain_cfg *cfg)
